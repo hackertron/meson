@@ -642,9 +642,11 @@ class BasePlatformTests(unittest.TestCase):
         return self.build(target=target)
 
     def setconf(self, arg, will_build=True):
+        if not isinstance(arg, list):
+            arg = [arg]
         if will_build:
             ensure_backend_detects_changes(self.backend)
-        self._run(self.mconf_command + [arg, self.builddir])
+        self._run(self.mconf_command + arg + [self.builddir])
 
     def wipe(self):
         windows_proof_rmtree(self.builddir)
@@ -2020,6 +2022,58 @@ recommended as it can lead to undefined behaviour on some platforms''')
         self.builddir = exebuilddir
         self.assertRebuiltTarget('app')
 
+    def test_conflicting_d_dash_option(self):
+        testdir = os.path.join(self.unit_test_dir, '30 mixed command line args')
+        with self.assertRaises(subprocess.CalledProcessError) as e:
+            self.init(testdir, extra_args=['-Dbindir=foo', '--bindir=bar'])
+            # Just to ensure that we caught the correct error
+            self.assertIn('passed as both', e.stderr)
+
+    def _test_same_option_twice(self, arg, args):
+        testdir = os.path.join(self.unit_test_dir, '30 mixed command line args')
+        self.init(testdir, extra_args=args)
+        opts = self.introspect('--buildoptions')
+        for item in opts:
+            if item['name'] == arg:
+                self.assertEqual(item['value'], 'bar')
+                return
+        raise Exception('Missing {} value?'.format(arg))
+
+    def test_same_dash_option_twice(self):
+        self._test_same_option_twice('bindir', ['--bindir=foo', '--bindir=bar'])
+
+    def test_same_d_option_twice(self):
+        self._test_same_option_twice('bindir', ['-Dbindir=foo', '-Dbindir=bar'])
+
+    def test_same_project_d_option_twice(self):
+        self._test_same_option_twice('one', ['-Done=foo', '-Done=bar'])
+
+    def _test_same_option_twice_configure(self, arg, args):
+        testdir = os.path.join(self.unit_test_dir, '30 mixed command line args')
+        self.init(testdir)
+        self.setconf(args)
+        opts = self.introspect('--buildoptions')
+        for item in opts:
+            if item['name'] == arg:
+                self.assertEqual(item['value'], 'bar')
+                return
+        raise Exception('Missing {} value?'.format(arg))
+
+    def test_same_dash_option_twice_configure(self):
+        with self.assertRaises(subprocess.CalledProcessError) as e:
+            self._test_same_option_twice_configure(
+                'bindir', ['--bindir=foo', '--bindir=bar'])
+            self.assertIn('Pick one.', e.stderr)
+
+    def test_same_d_option_twice_configure(self):
+        self._test_same_option_twice_configure(
+            'bindir', ['-Dbindir=foo', '-Dbindir=bar'])
+
+    def test_same_project_d_option_twice_configure(self):
+        self._test_same_option_twice_configure(
+            'one', ['-Done=foo', '-Done=bar'])
+
+
 
 class FailureTests(BasePlatformTests):
     '''
@@ -2676,6 +2730,74 @@ class LinuxlikeTests(BasePlatformTests):
         if os.getuid() == 0:
             # The chown failed nonfatally if we're not root
             self.assertEqual(0, statf.st_uid)
+
+    def test_install_umask(self):
+        '''
+        Test that files are installed with correct permissions using default
+        install umask of 022, regardless of the umask at time the worktree
+        was checked out or the build was executed.
+        '''
+        # Copy source tree to a temporary directory and change permissions
+        # there to simulate a checkout with umask 002.
+        orig_testdir = os.path.join(self.unit_test_dir, '24 install umask')
+        # Create a new testdir under tmpdir.
+        tmpdir = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(windows_proof_rmtree, tmpdir)
+        testdir = os.path.join(tmpdir, '24 install umask')
+        # Copy the tree using shutil.copyfile, which will use the current umask
+        # instead of preserving permissions of the old tree.
+        save_umask = os.umask(0o002)
+        self.addCleanup(os.umask, save_umask)
+        shutil.copytree(orig_testdir, testdir, copy_function=shutil.copyfile)
+        # Preserve the executable status of subdir/sayhello though.
+        os.chmod(os.path.join(testdir, 'subdir', 'sayhello'), 0o775)
+        self.init(testdir)
+        # Run the build under a 027 umask now.
+        os.umask(0o027)
+        self.build()
+        # And keep umask 027 for the install step too.
+        self.install()
+
+        for executable in [
+                'bin/prog',
+                'share/subdir/sayhello',
+        ]:
+            f = os.path.join(self.installdir, 'usr', *executable.split('/'))
+            found_mode = stat.filemode(os.stat(f).st_mode)
+            want_mode = '-rwxr-xr-x'
+            self.assertEqual(want_mode, found_mode,
+                             msg=('Expected file %s to have mode %s but found %s instead.' %
+                                  (executable, want_mode, found_mode)))
+
+        for directory in [
+                'usr',
+                'usr/bin',
+                'usr/include',
+                'usr/share',
+                'usr/share/man',
+                'usr/share/man/man1',
+                'usr/share/subdir',
+        ]:
+            f = os.path.join(self.installdir, *directory.split('/'))
+            found_mode = stat.filemode(os.stat(f).st_mode)
+            want_mode = 'drwxr-xr-x'
+            self.assertEqual(want_mode, found_mode,
+                             msg=('Expected directory %s to have mode %s but found %s instead.' %
+                                  (directory, want_mode, found_mode)))
+
+        for datafile in [
+                'include/sample.h',
+                'share/datafile.cat',
+                'share/file.dat',
+                'share/man/man1/prog.1.gz',
+                'share/subdir/datafile.dog',
+        ]:
+            f = os.path.join(self.installdir, 'usr', *datafile.split('/'))
+            found_mode = stat.filemode(os.stat(f).st_mode)
+            want_mode = '-rw-r--r--'
+            self.assertEqual(want_mode, found_mode,
+                             msg=('Expected file %s to have mode %s but found %s instead.' %
+                                  (datafile, want_mode, found_mode)))
 
     def test_cpp_std_override(self):
         testdir = os.path.join(self.unit_test_dir, '6 std override')
