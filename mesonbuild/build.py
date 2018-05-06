@@ -817,16 +817,22 @@ This will become a hard error in a future Meson release.''')
     def get_extra_args(self, language):
         return self.extra_args.get(language, [])
 
-    def get_dependencies(self, exclude=None):
+    def get_dependencies(self, exclude=None, internal=True):
         transitive_deps = []
         if exclude is None:
             exclude = []
-        for t in itertools.chain(self.link_targets, self.link_whole_targets):
+        if internal:
+            link_targets = itertools.chain(self.link_targets, self.link_whole_targets)
+        else:
+            # We don't want the 'internal' libraries when generating the
+            # `Libs:` and `Libs.private:` lists in pkg-config files.
+            link_targets = self.link_targets
+        for t in link_targets:
             if t in transitive_deps or t in exclude:
                 continue
             transitive_deps.append(t)
             if isinstance(t, StaticLibrary):
-                transitive_deps += t.get_dependencies(transitive_deps + exclude)
+                transitive_deps += t.get_dependencies(transitive_deps + exclude, internal)
         return transitive_deps
 
     def get_source_subdir(self):
@@ -983,6 +989,8 @@ You probably should put it in link_with instead.''')
         langs = []
         # Check if any of the external libraries were written in this language
         for dep in self.external_deps:
+            if dep.language is None:
+                continue
             if dep.language not in langs:
                 langs.append(dep.language)
         # Check if any of the internal libraries this target links to were
@@ -993,7 +1001,7 @@ You probably should put it in link_with instead.''')
                     langs.append(language)
         return langs
 
-    def get_clike_dynamic_linker(self):
+    def get_clike_dynamic_linker_and_stdlibs(self):
         '''
         We use the order of languages in `clike_langs` to determine which
         linker to use in case the target has sources compiled with multiple
@@ -1015,12 +1023,19 @@ You probably should put it in link_with instead.''')
         for l in clike_langs:
             if l in self.compilers or l in dep_langs:
                 try:
-                    return all_compilers[l]
+                    linker = all_compilers[l]
                 except KeyError:
                     raise MesonException(
                         'Could not get a dynamic linker for build target {!r}. '
                         'Requires a linker for language "{}", but that is not '
                         'a project language.'.format(self.name, l))
+                stdlib_args = []
+                added_languages = set()
+                for dl in itertools.chain(self.compilers, dep_langs):
+                    if dl != linker.language:
+                        stdlib_args += all_compilers[dl].language_stdlib_only_link_flags()
+                        added_languages.add(dl)
+                return linker, stdlib_args
 
         m = 'Could not get a dynamic linker for build target {!r}'
         raise AssertionError(m.format(self.name))
@@ -1043,7 +1058,8 @@ You probably should put it in link_with instead.''')
         2. If the target contains only objects, process_compilers guesses and
            picks the first compiler that smells right.
         '''
-        linker = self.get_clike_dynamic_linker()
+        linker, _ = self.get_clike_dynamic_linker_and_stdlibs()
+        # Mixing many languages with MSVC is not supported yet so ignore stdlibs.
         if linker and linker.get_id() == 'msvc':
             return True
         return False
@@ -1974,7 +1990,7 @@ def get_sources_string_names(sources):
             s = s.held_object
         if isinstance(s, str):
             names.append(s)
-        elif isinstance(s, (BuildTarget, CustomTarget, GeneratedList)):
+        elif isinstance(s, (BuildTarget, CustomTarget, CustomTargetIndex, GeneratedList)):
             names += s.get_outputs()
         elif isinstance(s, File):
             names.append(s.fname)

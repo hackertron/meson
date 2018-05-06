@@ -2060,10 +2060,8 @@ recommended as it can lead to undefined behaviour on some platforms''')
         raise Exception('Missing {} value?'.format(arg))
 
     def test_same_dash_option_twice_configure(self):
-        with self.assertRaises(subprocess.CalledProcessError) as e:
-            self._test_same_option_twice_configure(
-                'bindir', ['--bindir=foo', '--bindir=bar'])
-            self.assertIn('Pick one.', e.stderr)
+        self._test_same_option_twice_configure(
+            'bindir', ['--bindir=foo', '--bindir=bar'])
 
     def test_same_d_option_twice_configure(self):
         self._test_same_option_twice_configure(
@@ -2073,6 +2071,54 @@ recommended as it can lead to undefined behaviour on some platforms''')
         self._test_same_option_twice_configure(
             'one', ['-Done=foo', '-Done=bar'])
 
+    def test_command_line(self):
+        testdir = os.path.join(self.unit_test_dir, '30 command line')
+
+        # Verify default values when passing no args
+        self.init(testdir)
+        obj = mesonbuild.coredata.load(self.builddir)
+        self.assertEqual(obj.builtins['default_library'].value, 'static')
+        self.assertEqual(obj.builtins['warning_level'].value, '1')
+        self.wipe()
+
+        # warning_level is special, it's --warnlevel instead of --warning-level
+        # for historical reasons
+        self.init(testdir, extra_args=['--warnlevel=2'])
+        obj = mesonbuild.coredata.load(self.builddir)
+        self.assertEqual(obj.builtins['warning_level'].value, '2')
+        self.setconf('--warnlevel=3')
+        obj = mesonbuild.coredata.load(self.builddir)
+        self.assertEqual(obj.builtins['warning_level'].value, '3')
+        self.wipe()
+
+        # But when using -D syntax, it should be 'warning_level'
+        self.init(testdir, extra_args=['-Dwarning_level=2'])
+        obj = mesonbuild.coredata.load(self.builddir)
+        self.assertEqual(obj.builtins['warning_level'].value, '2')
+        self.setconf('-Dwarning_level=3')
+        obj = mesonbuild.coredata.load(self.builddir)
+        self.assertEqual(obj.builtins['warning_level'].value, '3')
+        self.wipe()
+
+        # Mixing --option and -Doption is forbidden
+        with self.assertRaises(subprocess.CalledProcessError) as e:
+            self.init(testdir, extra_args=['--warnlevel=1', '-Dwarning_level=3'])
+            self.assertNotEqual(0, e.returncode)
+            self.assertIn('passed as both', e.stderr)
+        with self.assertRaises(subprocess.CalledProcessError) as e:
+            self.setconf('--warnlevel=1', '-Dwarning_level=3')
+            self.assertNotEqual(0, e.returncode)
+            self.assertIn('passed as both', e.stderr)
+        self.wipe()
+
+        # --default-library should override default value from project()
+        self.init(testdir, extra_args=['--default-library=both'])
+        obj = mesonbuild.coredata.load(self.builddir)
+        self.assertEqual(obj.builtins['default_library'].value, 'both')
+        self.setconf('--default-library=shared')
+        obj = mesonbuild.coredata.load(self.builddir)
+        self.assertEqual(obj.builtins['default_library'].value, 'shared')
+        self.wipe()
 
 
 class FailureTests(BasePlatformTests):
@@ -3056,6 +3102,18 @@ endian = 'little'
             self.init(os.path.join(testdirbase, 'app'))
             self.build()
 
+    @unittest.skipIf(shutil.which('pkg-config') is None, 'Pkg-config not found.')
+    def test_pkgconfig_formatting(self):
+        testdir = os.path.join(self.unit_test_dir, '31 pkgconfig format')
+        self.init(testdir)
+        myenv = os.environ.copy()
+        myenv['PKG_CONFIG_PATH'] = self.privatedir
+        stdo = subprocess.check_output(['pkg-config', '--libs-only-l', 'libsomething'], env=myenv)
+        deps = [b'-lgobject-2.0', b'-lgio-2.0', b'-lglib-2.0', b'-lsomething']
+        if is_windows() or is_cygwin():
+            # On Windows, libintl is a separate library
+            deps.append(b'-lintl')
+        self.assertEqual(set(deps), set(stdo.split()))
 
 class LinuxArmCrossCompileTests(BasePlatformTests):
     '''
@@ -3102,7 +3160,7 @@ class PythonTests(BasePlatformTests):
         if self.backend is not Backend.ninja:
             raise unittest.SkipTest('Skipping python tests with {} backend'.format(self.backend.name))
 
-        testdir = os.path.join(self.src_root, 'test cases', 'python', '1 extmodule')
+        testdir = os.path.join(self.src_root, 'test cases', 'unit', '32 python extmodule')
 
         # No python version specified, this will use meson's python
         self.init(testdir)
@@ -3127,6 +3185,19 @@ class PythonTests(BasePlatformTests):
             pass
 
         self.wipe()
+
+        for py in ('pypy', 'pypy3'):
+            try:
+                self.init(testdir, ['-Dpython=%s' % py])
+            except unittest.SkipTest:
+                # Same as above, pypy2 and pypy3 are not expected to be present
+                # on the test system, the test project only raises in these cases
+                continue
+
+            # We have a pypy, this is expected to work
+            self.build()
+            self.run_tests()
+            self.wipe()
 
         # The test is configured to error out with MESON_SKIP_TEST
         # in case it could not find python

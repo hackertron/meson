@@ -25,7 +25,7 @@ from .mesonlib import FileMode, Popen_safe, listify, extract_as_list, has_path_s
 from .dependencies import ExternalProgram
 from .dependencies import InternalDependency, Dependency, NotFoundDependency, DependencyException
 from .interpreterbase import InterpreterBase
-from .interpreterbase import check_stringlist, noPosargs, noKwargs, stringArgs, permittedKwargs
+from .interpreterbase import check_stringlist, flatten, noPosargs, noKwargs, stringArgs, permittedKwargs, noArgsFlattening
 from .interpreterbase import InterpreterException, InvalidArguments, InvalidCode, SubdirDoneRequest
 from .interpreterbase import InterpreterObject, MutableInterpreterObject, Disabler
 from .modules import ModuleReturnValue
@@ -225,6 +225,7 @@ class ConfigurationDataHolder(MutableInterpreterObject, ObjectHolder):
 
         return name, val, desc
 
+    @noArgsFlattening
     def set_method(self, args, kwargs):
         (name, val, desc) = self.validate_args(args, kwargs)
         self.held_object.values[name] = (val, desc)
@@ -246,6 +247,7 @@ class ConfigurationDataHolder(MutableInterpreterObject, ObjectHolder):
     def has_method(self, args, kwargs):
         return args[0] in self.held_object.values
 
+    @noArgsFlattening
     def get_method(self, args, kwargs):
         if len(args) < 1 or len(args) > 2:
             raise InterpreterException('Get method takes one or two arguments.')
@@ -1389,6 +1391,8 @@ class ModuleHolder(InterpreterObject, ObjectHolder):
             raise InvalidArguments('Module %s does not have method %s.' % (self.modname, method_name))
         if method_name.startswith('_'):
             raise InvalidArguments('Function {!r} in module {!r} is private.'.format(method_name, self.modname))
+        if not getattr(fn, 'no-args-flattening', False):
+            args = flatten(args)
         # This is not 100% reliable but we can't use hash()
         # because the Build object contains dicts and lists.
         num_targets = len(self.interpreter.build.targets)
@@ -1618,6 +1622,7 @@ class MesonMain(InterpreterObject):
     def project_name_method(self, args, kwargs):
         return self.interpreter.active_projectname
 
+    @noArgsFlattening
     @permittedKwargs({})
     def get_cross_property_method(self, args, kwargs):
         if len(args) < 1 or len(args) > 2:
@@ -2386,24 +2391,21 @@ to directly access options of other subprojects.''')
             mlog.log('Native %s compiler: ' % comp.get_display_language(), mlog.bold(' '.join(comp.get_exelist())), version_string, sep='')
 
             # If <language>_args/_link_args settings are given on the
-            # command line, use them.
+            # command line, use them, otherwise take them from env.
+            (preproc_args, compile_args, link_args) = environment.get_args_from_envvars(comp)
             for optspec in self.build.environment.cmd_line_options.projectoptions:
                 (optname, optvalue) = optspec.split('=', maxsplit=1)
-                if optname.endswith('_link_args'):
-                    lang = optname[:-10]
-                    self.coredata.external_link_args.setdefault(lang, []).append(optvalue)
+                if optname == lang + '_link_args':
+                    link_args = shlex.split(optvalue)
                 elif optname.endswith('_args'):
-                    lang = optname[:-5]
-                    self.coredata.external_args.setdefault(lang, []).append(optvalue)
-            # Otherwise, look for definitions from environment
-            # variables such as CFLAGS.
-            (preproc_args, compile_args, link_args) = environment.get_args_from_envvars(comp)
-            if not comp.get_language() in self.coredata.external_preprocess_args:
-                self.coredata.external_preprocess_args[comp.get_language()] = preproc_args
-            if not comp.get_language() in self.coredata.external_args:
-                self.coredata.external_args[comp.get_language()] = compile_args
-            if not comp.get_language() in self.coredata.external_link_args:
-                self.coredata.external_link_args[comp.get_language()] = link_args
+                    compile_args = shlex.split(optvalue)
+            if lang not in self.coredata.external_preprocess_args:
+                self.coredata.external_preprocess_args[lang] = preproc_args
+            if lang not in self.coredata.external_args:
+                self.coredata.external_args[lang] = compile_args
+            if lang not in self.coredata.external_link_args:
+                self.coredata.external_link_args[lang] = link_args
+
             self.build.add_compiler(comp)
             if need_cross_compiler:
                 mlog.log('Cross %s compiler: ' % cross_comp.get_display_language(), mlog.bold(' '.join(cross_comp.get_exelist())), ' (%s %s)' % (cross_comp.id, cross_comp.version), sep='')
@@ -3620,6 +3622,7 @@ This will become a hard error in the future.''')
         return self.subproject != ''
 
     @noKwargs
+    @noArgsFlattening
     def func_set_variable(self, node, args, kwargs):
         if len(args) != 2:
             raise InvalidCode('Set_variable takes two arguments.')
@@ -3628,6 +3631,7 @@ This will become a hard error in the future.''')
         self.set_variable(varname, value)
 
     @noKwargs
+    @noArgsFlattening
     def func_get_variable(self, node, args, kwargs):
         if len(args) < 1 or len(args) > 2:
             raise InvalidCode('Get_variable takes one or two arguments.')
