@@ -290,7 +290,7 @@ class EnvironmentVariables:
         return value
 
     def get_env(self, full_env):
-        env = {}
+        env = full_env.copy()
         for method, name, values, kwargs in self.envvars:
             env[name] = method(full_env, name, values, kwargs)
         return env
@@ -698,7 +698,7 @@ just like those detected with the dependency() function.''')
         for key, value in compiler_args.items():
             self.add_compiler_args(key, value)
 
-        if not isinstance(self, Executable):
+        if not isinstance(self, Executable) or 'export_dynamic' in kwargs:
             self.vala_header = kwargs.get('vala_header', self.name + '.h')
             self.vala_vapi = kwargs.get('vala_vapi', self.name + '.vapi')
             self.vala_gir = kwargs.get('vala_gir', None)

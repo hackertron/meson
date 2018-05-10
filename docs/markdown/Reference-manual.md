@@ -1636,6 +1636,12 @@ The following keyword arguments can be used:
   `sizeof`, `has_type`, `has_function`, `has_member`, `has_members`,
   `has_header_symbol`.
 
+**Note:** These compiler checks do not use compiler arguments added with 
+`add_*_arguments()`, via `-Dlang_args` on the command-line, or through
+`CFLAGS`/`LDFLAGS`, etc in the environment. Hence, you can trust that
+the tests will be fully self-contained, and won't fail because of custom
+flags added by other parts of the build file or by users.
+
 Note that if you have a single prefix with all your dependencies, you
 might find it easier to append to the environment variables
 `C_INCLUDE_PATH` with GCC/Clang and `INCLUDE` with MSVC to expand the
@@ -1882,9 +1888,9 @@ and has the following methods:
 
 - `found()` which returns whether the executable was found
 
-- `path()` which returns an array pointing to the executable (this is
-  an array as opposed to a string because the program might be
-  `['python', 'foo.py']`, for example)
+- `path()` which returns a string pointing to the script or executable  
+  **NOTE:** You should not need to use this method. Passing the object
+  itself should work in all cases. F.ex.: `run_command(obj, arg1, arg2)`
 
 ### `environment` object
 

@@ -1058,6 +1058,8 @@ int dummy;
         """
         result = OrderedSet()
         for dep in itertools.chain(target.link_targets, target.link_whole_targets):
+            if not dep.is_linkable_target():
+                continue
             for i in dep.sources:
                 if hasattr(i, 'fname'):
                     i = i.fname
@@ -1180,7 +1182,7 @@ int dummy;
         # found inside the build tree (generated sources).
         args += ['--directory', c_out_dir]
         args += ['--basedir', srcbasedir]
-        if not isinstance(target, build.Executable):
+        if target.is_linkable_target():
             # Library name
             args += ['--library', target.name]
             # Outputted header
@@ -2398,7 +2400,7 @@ rule FORTRAN_DEP_HACK%s
             commands += linker.get_pic_args()
             # Add -Wl,-soname arguments on Linux, -install_name on OS X
             commands += linker.get_soname_args(target.prefix, target.name, target.suffix,
-                                               abspath, target.soversion, target.ltversion,
+                                               abspath, target.soversion,
                                                isinstance(target, build.SharedModule))
             # This is only visited when building for Windows using either GCC or Visual Studio
             if target.vs_module_defs and hasattr(linker, 'gen_vs_module_defs_args'):
